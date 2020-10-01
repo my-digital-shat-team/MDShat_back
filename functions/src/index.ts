@@ -16,8 +16,8 @@ const db = admin.firestore();
 
 
 ////// USERS ///////
-
-app.post('/api/users', (req: any, res: any) => {
+// Create a user
+app.post('/api/users', async(req: any, res: any) => {
 	admin
 		.auth()
 		.createUser({
@@ -34,7 +34,49 @@ app.post('/api/users', (req: any, res: any) => {
 		});
 });
 
-app.get('/api/users/:uid', (req: any, res: any) => {
+// Get all users
+app.get('/api/users', async (req:any, res:any) => {
+	function listAllUsers(nextPageToken: any) {
+		// List batch of users, 1000 at a time.
+		const users: { uid: string; email: string | undefined; }[] = [];
+		admin.auth().listUsers(1000, nextPageToken)
+			.then(function(listUsersResult) {
+				listUsersResult.users.forEach(function(userRecord) {
+					users.push({
+						"uid": userRecord.uid,
+						"email": userRecord.email
+					})
+				});
+				if (listUsersResult.pageToken) {
+					listAllUsers(listUsersResult.pageToken);
+				}
+				res.status(200).send(users)
+			})
+			.catch(function(error) {
+				res.status(500).send(`Error while fetching users : ${error}`)
+			});
+	}
+// Start listing users from the beginning, 1000 at a time.
+	listAllUsers('0');
+})
+
+// Get all selected user channels
+app.get('/api/users/:id/channels', async (req, res) => {
+	try {
+		const channelsRef = db.collection('channel_users')
+		const snapshot = await channelsRef.where('user_id', '==', req.params.id).get()
+		const channels: any[] = [];
+		snapshot.forEach(doc => {
+			channels.push(doc.data())
+		});
+		return res.status(200).json({ channels });
+	} catch (err) {
+		return res.status(500).send(err)
+	}
+})
+
+// Get selected user data
+app.get('/api/users/:uid', async (req: any, res: any) => {
 	admin
 		.auth()
 		.getUser(req.params.uid)
@@ -47,27 +89,13 @@ app.get('/api/users/:uid', (req: any, res: any) => {
 		});
 });
 
-app.post('/api/me', (req: any, res: any) => {
-	admin.auth().verifyIdToken(req.body.idToken)
-		.then(function(decodedToken) {
-			const uid = decodedToken.uid;
-			res.status(200).send('Ok')
-			return uid;
-		}).catch(function(error) {
-		res.status(200).send('Ok')
-		return ("ERROR")
-	});
-})
-
 ////// CHAT ///////
 
-app.post('/api/messages', (req, res) => {
-	(async () => {
+app.post('/api/messages', async(req, res) => {
 		try {
 			await db
 				.collection('messages')
-				.doc('/' + req.body.id + '/')
-				.create({
+				.add({
 					user_id: req.body.user_id,
 					channel_id: req.body.channel_id,
 					content: req.body.content
@@ -77,11 +105,9 @@ app.post('/api/messages', (req, res) => {
 			console.log(error);
 			return res.status(500).send(error);
 		}
-	})();
 });
 
-app.get('/api/messages/:id', (req, res) => {
-	(async () => {
+app.get('/api/messages/:id', async (req, res) => {
 		try {
 			const document = db.collection('messages').doc(req.params.id);
 			const item = await document.get();
@@ -91,10 +117,9 @@ app.get('/api/messages/:id', (req, res) => {
 			console.log(error);
 			return res.status(500).send(error);
 		}
-	})();
 });
 
-app.get('/api/messages/:user_id', async (req, res) => {
+app.get('/api/messages/:channel_id', async (req, res) => {
 	try {
 		const userQuerySnapshot = await db.collection('messages').get();
 		const messages: any[] = [];
@@ -112,36 +137,43 @@ app.get('/api/messages/:user_id', async (req, res) => {
 
 ////// CHANNEL ///////
 
-app.post('/api/channels', (req, res) => {
-	(async () => {
-		try {
-			await db
-				.collection('channels')
-				.doc('/' + req.body.id + '/')
-				.create({
-					name: req.body.name,
-					is_private: req.body.is_private
-				});
-			return res.status(200).send();
-		} catch (error) {
-			console.log(error);
-			return res.status(500).send(error);
-		}
-	})();
+// Create channel
+app.post('/api/channels', async(req, res) => {
+	try {
+		const response = await db
+			.collection('channels')
+			.add({
+				name: req.body.name
+			});
+		return res.status(200).send({"channel_id": response.id});
+	} catch (error) {
+		console.log(error);
+		return res.status(500).send(error);
+	}
 });
 
-app.get('/api/channels/:id', (req, res) => {
-	(async () => {
-		try {
-			const document = db.collection('channels').doc(req.params.id);
-			const item = await document.get();
-			const response = item.data();
-			return res.status(200).send(response);
-		} catch (error) {
-			console.log(error);
-			return res.status(500).send(error);
-		}
-	})();
+app.post('/api/channels/add-user', async(req, res) => {
+	try {
+		await db
+			.collection('channel_users')
+			.add({
+				channel_id: req.body.channel_id,
+				user_id: req.body.user_id
+			})
+		return res.status(200).send();
+	} catch (err) {
+		return res.status(500).send(err)
+	}
+})
+
+app.get('/api/channels/:id', async (req, res) => {
+	try {
+		const doc = await db.collection('channels').doc(req.params.id).get();
+		return res.status(200).json(doc.data());
+	} catch (error) {
+		console.log(error);
+		return res.status(500).send(error);
+	}
 });
 
 exports.app = functions.https.onRequest(app);
